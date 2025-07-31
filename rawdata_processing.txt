@@ -1,0 +1,396 @@
+ssh mingming@10.139.235.218
+cd /home/Projects
+
+mkdir eIF4A_aptamer
+cd eIF4A_aptamer
+mkdir rawdata
+cd rawdata
+md5sum *
+
+
+########gff to gtf converter
+cd ../
+cd Genome
+mkdir HD961
+cd T2T_Nipponbare
+conda activate agat_env
+agat_convert_sp_gff2gtf.pl --gff NIP-T2T.gff3.gz -o NIP-T2T.gff3.gtf
+
+cd HD961
+bedtools getfasta -fi 02.Assembly/01.Correct_Genome/Final_corrected_assemly_genome.fa -bed 03.Annotation/02.gene_prediction/Chr_genome_final_gene.gtf -fo extracted_transcripts.fa
+
+cd 03.Annotation/02.gene_prediction
+agat_convert_sp_gff2gtf.pl --gff Chr_genome_final_gene.gff3 -o Chr_genome_final_gene.gtf
+
+
+###rRNA, tRNA: https://rapdb.dna.affrc.go.jp/download/build5.html
+agat_convert_sp_gff2gtf.pl --gff rRNA.gff.gz -o rRNA.gtf
+agat_convert_sp_gff2gtf.pl --gff tRNA.gff.gz -o tRNA.gtf
+
+##########make STAR genome
+####build Genome_index
+cd ../../../
+mkdir NIP_STAR
+nohup STAR --runMode genomeGenerate \
+--sjdbGTFfile NIP-T2T.gff3.gtf \
+--genomeDir NIP_STAR \
+--genomeFastaFiles NIP-T2T.fa \
+--runThreadN 12 \
+--limitGenomeGenerateRAM 48000000000 &
+
+mkdir HD961_STAR
+nohup STAR --runMode genomeGenerate \
+--sjdbGTFfile HD961/03.Annotation/02.gene_prediction/Chr_genome_final_gene.gtf \
+--genomeDir HD961_STAR \
+--genomeFastaFiles HD961/02.Assembly/01.Correct_Genome/Final_corrected_assemly_genome.fa \
+--runThreadN 12 \
+--limitGenomeGenerateRAM 48000000000 &
+
+mkdir NIP_rRNA
+nohup STAR --runMode genomeGenerate --genomeDir NIP_rRNA --genomeFastaFiles ./rRNA.fa --genomeSAindexNbases 6 --runThreadN 12 &
+
+mkdir NIP_tRNA
+nohup STAR --runMode genomeGenerate --genomeDir NIP_tRNA --genomeFastaFiles ./tRNA.fa --genomeSAindexNbases 6 --runThreadN 12 &
+
+####note --genomeSAindexNbases option is required for smaller genome
+####calculate --genomeSAindexNbases by checking Page22 of https://physiology.med.cornell.edu/faculty/skrabanek/lab/angsd/lecture_notes/STARmanual.pdf
+
+
+##########directory preparation
+cd ../../
+mkdir Alignment
+mkdir HD961_Alignment
+mkdir clipped
+cd clipped
+
+
+##########cleanup using fastp
+###riboseq
+fastp -i ../rawdata/Salt-1_R1.fq.gz -I ../rawdata/Salt-1_R2.fq.gz \
+      -o Salt1_R1_trimmed.fastq -O Salt1_R2_trimmed.fastq \
+      --trim_poly_x --poly_x_min_len=6 \
+      --length_required=15 \
+      --thread=60 &
+      
+fastp -i ../rawdata/Salt-2_R1.fq.gz -I ../rawdata/Salt-2_R2.fq.gz \
+      -o Salt2_R1_trimmed.fastq -O Salt2_R2_trimmed.fastq \
+      --trim_poly_x --poly_x_min_len=6 \
+      --length_required=15 \
+      --thread=60 &
+
+fastp -i ../rawdata/CK-1_R1.fq.gz -I ../rawdata/CK-1_R2.fq.gz \
+      -o CK1_R1_trimmed.fastq -O CK1_R2_trimmed.fastq \
+      --trim_poly_x --poly_x_min_len=6 \
+      --length_required=15 \
+      --thread=60 &
+      
+fastp -i ../rawdata/CK-2_R1.fq.gz -I ../rawdata/CK-2_R2.fq.gz \
+      -o CK2_R1_trimmed.fastq -O CK2_R2_trimmed.fastq \
+      --trim_poly_x --poly_x_min_len=6 \
+      --length_required=15 \
+      --thread=60 &
+      
+###RNAseq
+fastp -i ../RNAseq_rawdata/BMK241227-CM728-ZX01-0201/BMK_DATA_20250212200003_2/Data/Unknown_CM728-001T0001_good_1.fq.gz \
+      -I ../RNAseq_rawdata/BMK241227-CM728-ZX01-0201/BMK_DATA_20250212200003_2/Data/Unknown_CM728-001T0001_good_2.fq.gz \
+      -o CK1_RNAseq_R1_trimmed.fastq -O CK1_RNAseq_R2_trimmed.fastq \
+      --thread=16 &
+      
+fastp -i ../RNAseq_rawdata/BMK241227-CM728-ZX01-0201/BMK_DATA_20250212200003_2/Data/Unknown_CM728-001T0002_good_1.fq.gz \
+      -I ../RNAseq_rawdata/BMK241227-CM728-ZX01-0201/BMK_DATA_20250212200003_2/Data/Unknown_CM728-001T0002_good_2.fq.gz \
+      -o CK2_RNAseq_R1_trimmed.fastq -O CK2_RNAseq_R2_trimmed.fastq \
+      --thread=16 &
+
+fastp -i ../RNAseq_rawdata/BMK241227-CM728-ZX01-0201/BMK_DATA_20250212200003_2/Data/Unknown_CM728-001T0003_good_1.fq.gz \
+      -I ../RNAseq_rawdata/BMK241227-CM728-ZX01-0201/BMK_DATA_20250212200003_2/Data/Unknown_CM728-001T0003_good_2.fq.gz \
+      -o Salt1_RNAseq_R1_trimmed.fastq -O Salt1_RNAseq_R2_trimmed.fastq \
+      --thread=16 &
+
+fastp -i ../RNAseq_rawdata/BMK241227-CM728-ZX01-0201/BMK_DATA_20250212200003_2/Data/Unknown_CM728-001T0004_good_1.fq.gz \
+      -I ../RNAseq_rawdata/BMK241227-CM728-ZX01-0201/BMK_DATA_20250212200003_2/Data/Unknown_CM728-001T0004_good_2.fq.gz \
+      -o Salt2_RNAseq_R1_trimmed.fastq -O Salt2_RNAseq_R2_trimmed.fastq \
+      --thread=16 &
+
+#########Align rRNA-depleted reads to rice genome and generate transcriptome alignment
+
+cd ../Alignment
+mkdir CK1_rRNA
+mkdir CK1_tRNA
+mkdir CK1_mapped
+##riboseq
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_rRNA --readFilesIn ../clipped/CK1_R1_trimmed.fastq --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK1_rRNA/CK1 --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_tRNA --readFilesIn ./CK1_rRNA/CK1_Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK1_tRNA/CK1 --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_STAR --readFilesIn ./CK1_tRNA/CK1_Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK1_mapped/CK1_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+###rnaseq
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_rRNA --readFilesIn ../clipped/CK1_RNAseq_R1_trimmed.fastq --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK1_rRNA/CK1_RNA --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_tRNA --readFilesIn ./CK1_rRNA/CK1_RNAUnmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK1_tRNA/CK1_RNA --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_STAR --readFilesIn ./CK1_tRNA/CK1_RNAUnmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK1_mapped/CK1_RNA_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+mkdir CK2_rRNA
+mkdir CK2_tRNA
+mkdir CK2_mapped
+##riboseq
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_rRNA --readFilesIn ../clipped/CK2_R1_trimmed.fastq --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK2_rRNA/CK2 --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_tRNA --readFilesIn ./CK2_rRNA/CK2Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK2_tRNA/CK2 --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_STAR --readFilesIn ./CK2_tRNA/CK2Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK2_mapped/CK2_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+##rnaseq
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_rRNA --readFilesIn ../clipped/CK2_RNAseq_R1_trimmed.fastq --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK2_rRNA/CK2_RNA --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_tRNA --readFilesIn ./CK2_rRNA/CK2_RNAUnmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK2_tRNA/CK2_RNA --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_STAR --readFilesIn ./CK2_tRNA/CK2_RNAUnmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK2_mapped/CK2_RNA_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+
+mkdir Salt1_rRNA
+mkdir Salt1_tRNA
+mkdir Salt1_mapped
+##riboseq
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_rRNA --readFilesIn ../clipped/Salt1_R1_trimmed.fastq --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt1_rRNA/Salt1 --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_tRNA --readFilesIn ./Salt1_rRNA/Salt1Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt1_tRNA/Salt1 --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_STAR --readFilesIn ./Salt1_tRNA/Salt1Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt1_mapped/Salt1_ \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 20000000000 &
+##rnaseq        
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_rRNA --readFilesIn ../clipped/Salt1_RNAseq_R1_trimmed.fastq --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt1_rRNA/Salt1_RNA --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_tRNA --readFilesIn ./Salt1_rRNA/Salt1_RNAUnmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt1_tRNA/Salt1_RNA --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_STAR --readFilesIn ./Salt1_tRNA/Salt1_RNAUnmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt1_mapped/Salt1_RNA_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+mkdir Salt2_rRNA
+mkdir Salt2_tRNA
+mkdir Salt2_mapped
+##riboseq
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_rRNA --readFilesIn ../clipped/Salt2_R1_trimmed.fastq --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt2_rRNA/Salt2 --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_tRNA --readFilesIn ./Salt2_rRNA/Salt2Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt2_tRNA/Salt2 --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_STAR --readFilesIn ./Salt2_tRNA/Salt2Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt2_mapped/Salt2_ \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 20000000000 &
+
+##rnaseq
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_rRNA --readFilesIn ../clipped/Salt2_RNAseq_R1_trimmed.fastq --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt2_rRNA/Salt2_RNA --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_tRNA --readFilesIn ./Salt2_rRNA/Salt2_RNAUnmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt2_tRNA/Salt2_RNA --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+nohup STAR --genomeDir ../Genome/T2T_Nipponbare/NIP_STAR --readFilesIn ./Salt2_tRNA/Salt2_RNAUnmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt2_mapped/Salt2_RNA_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+   
+#########Extract mapped reads
+###riboseq
+samtools view -b CK1_mapped/CK1_Aligned.sortedByCoord.out.bam > CK1.bam &
+samtools view -b CK2_mapped/CK2_Aligned.sortedByCoord.out.bam > CK2.bam &
+
+samtools view -b Salt1_mapped/Salt1_Aligned.sortedByCoord.out.bam > Salt1.bam &
+samtools view -b Salt2_mapped/Salt2_Aligned.sortedByCoord.out.bam > Salt2.bam &
+
+samtools view -b CK1_mapped/CK1_Aligned.toTranscriptome.out.bam > CK1.transcriptome.bam &
+samtools view -b CK2_mapped/CK2_Aligned.toTranscriptome.out.bam > CK2.transcriptome.bam &
+
+samtools view -b Salt1_mapped/Salt1_Aligned.toTranscriptome.out.bam > Salt1.transcriptome.bam &
+samtools view -b Salt2_mapped/Salt2_Aligned.toTranscriptome.out.bam > Salt2.transcriptome.bam &
+
+###rnaseq
+samtools view -b CK1_mapped/CK1_RNA_Aligned.sortedByCoord.out.bam > CK1.RNA.bam &
+samtools view -b CK2_mapped/CK2_RNA_Aligned.sortedByCoord.out.bam > CK2.RNA.bam &
+
+samtools view -b Salt1_mapped/Salt1_RNA_Aligned.sortedByCoord.out.bam > Salt1.RNA.bam &
+samtools view -b Salt2_mapped/Salt2_RNA_Aligned.sortedByCoord.out.bam > Salt2.RNA.bam &
+
+samtools view -b CK1_mapped/CK1_RNA_Aligned.toTranscriptome.out.bam > CK1.RNA.transcriptome.bam &
+samtools view -b CK2_mapped/CK2_RNA_Aligned.toTranscriptome.out.bam > CK2.RNA.transcriptome.bam &
+
+samtools view -b Salt1_mapped/Salt1_RNA_Aligned.toTranscriptome.out.bam > Salt1.RNA.transcriptome.bam &
+samtools view -b Salt2_mapped/Salt2_RNA_Aligned.toTranscriptome.out.bam > Salt2.RNA.transcriptome.bam &
+
+#########Index bam files
+samtools index CK1.bam &
+samtools index CK2.bam &
+
+samtools index Salt1.bam &
+samtools index Salt2.bam &
+
+#########Suppress duplicated reads
+samtools rmdup -s CK1.bam CK1_unique.bam &
+samtools rmdup -s CK2.bam CK2_unique.bam &
+
+samtools rmdup -s Salt1.bam Salt1_unique.bam &
+samtools rmdup -s Salt2.bam Salt2_unique.bam &
+
+#########Index bam files
+samtools index CK1_unique.bam &
+samtools index CK2_unique.bam &
+
+samtools index Salt1_unique.bam &
+samtools index Salt2_unique.bam &
+
+
+#########bam to sam files
+samtools view -h -o CK1_unique.sam CK1_unique.bam &
+samtools view -h -o CK2_unique.sam CK2_unique.bam &
+
+samtools view -h -o Salt1_unique.sam Salt1_unique.bam &
+samtools view -h -o Salt2_unique.sam Salt2_unique.bam &
+
+##########quant FPKM using RSEM
+
+samtools rmdup -s CK1.transcriptome.bam CK1.unique.transcriptome.bam &
+samtools rmdup -s CK2.transcriptome.bam CK2.unique.transcriptome.bam &
+
+samtools rmdup -s Salt1.transcriptome.bam Salt1.unique.transcriptome.bam &
+samtools rmdup -s Salt2.transcriptome.bam Salt2.unique.transcriptome.bam &
+
+samtools rmdup -s CK1.RNA.transcriptome.bam CK1.RNA.unique.transcriptome.bam &
+samtools rmdup -s CK2.RNA.transcriptome.bam CK2.RNA.unique.transcriptome.bam &
+
+samtools rmdup -s Salt1.RNA.transcriptome.bam Salt1.RNA.unique.transcriptome.bam &
+samtools rmdup -s Salt2.RNA.transcriptome.bam Salt2.RNA.unique.transcriptome.bam &
+
+#################################
+############HD961################
+#################################
+
+cd ../HD961_Alignment
+mkdir CK1_mapped
+mkdir CK2_mapped
+
+mkdir Salt1_mapped
+mkdir Salt2_mapped
+
+
+nohup STAR --genomeDir ../Genome/HD961_STAR --readFilesIn ../Alignment/CK1_tRNA/CK1Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK1_mapped/CK1_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+nohup STAR --genomeDir ../Genome/HD961_STAR --readFilesIn ../Alignment/CK2_tRNA/CK2Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix CK2_mapped/CK2_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+nohup STAR --genomeDir ../Genome/HD961_STAR --readFilesIn ../Alignment/Salt1_tRNA/Salt1Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt1_mapped/Salt1_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+nohup STAR --genomeDir ../Genome/HD961_STAR --readFilesIn ../Alignment/Salt2_tRNA/Salt2Unmapped.out.mate1 --runThreadN 12 --outFilterMultimapNmax 2000 --outSAMtype BAM SortedByCoordinate --outFileNamePrefix Salt2_mapped/Salt2_  \
+           --quantMode TranscriptomeSAM GeneCounts --outReadsUnmapped Fastx --limitBAMsortRAM 10000000000 &
+
+#########Extract mapped reads
+samtools view -b CK1_mapped/CK1_Aligned.sortedByCoord.out.bam > CK1.bam &
+samtools view -b CK2_mapped/CK2_Aligned.sortedByCoord.out.bam > CK2.bam &
+
+samtools view -b Salt1_mapped/Salt1_Aligned.sortedByCoord.out.bam > Salt1.bam &
+samtools view -b Salt2_mapped/Salt2_Aligned.sortedByCoord.out.bam > Salt2.bam &
+
+
+samtools view -b CK1_mapped/CK1_Aligned.toTranscriptome.out.bam > CK1.transcriptome.bam &
+samtools view -b CK2_mapped/CK2_Aligned.toTranscriptome.out.bam > CK2.transcriptome.bam &
+
+samtools view -b Salt1_mapped/Salt1_Aligned.toTranscriptome.out.bam > Salt1.transcriptome.bam &
+samtools view -b Salt2_mapped/Salt2_Aligned.toTranscriptome.out.bam > Salt2.transcriptome.bam &
+
+#########Index bam files
+samtools index CK1.bam &
+samtools index CK2.bam &
+
+samtools index Salt1.bam &
+samtools index Salt2.bam &
+
+
+#########Suppress duplicated reads
+samtools rmdup -s CK1.bam CK1_unique.bam &
+samtools rmdup -s Salt1.bam Salt1_unique.bam &
+samtools rmdup -s CK1.transcriptome.bam CK1.unique.transcriptome.bam &
+samtools rmdup -s Salt1.transcriptome.bam Salt1.unique.transcriptome.bam &
+
+samtools rmdup -s CK2.bam CK2_unique.bam &
+samtools rmdup -s Salt2.bam Salt2_unique.bam &
+samtools rmdup -s CK2.transcriptome.bam CK2.unique.transcriptome.bam &
+samtools rmdup -s Salt2.transcriptome.bam Salt2.unique.transcriptome.bam &
+
+#########Index bam files
+samtools index CK1_unique.bam &
+samtools index Salt1_unique.bam &
+
+samtools index CK2_unique.bam &
+samtools index Salt2_unique.bam &
+
+#########bam to sam files
+samtools view -h -o CK1_unique.sam CK1_unique.bam &
+samtools view -h -o Salt1_unique.sam Salt1_unique.bam &
+
+samtools view -h -o CK2_unique.sam CK2_unique.bam &
+samtools view -h -o Salt2_unique.sam Salt2_unique.bam &
+
+##########quant FPKM using RSEM
+###########generate RSEM reference
+cd ~/Projects/eIF4A_aptamer/Genome/T2T_Nipponbare
+mkdir RSEM_reference
+rsem-prepare-reference \
+--gtf NIP-T2T.gff3.gtf \
+--star \
+NIP-T2T.fa \
+RSEM_reference/rsem_lib
+
+
+cd ~/Projects/eIF4A_aptamer/Genome/HD961
+mkdir RSEM_reference
+rsem-prepare-reference \
+--gtf ./03.Annotation/02.gene_prediction/Chr_genome_final_gene.gtf \
+--star \
+./02.Assembly/01.Correct_Genome/Final_corrected_assemly_genome.fa \
+RSEM_reference/rsem_lib
+
+
+########run RSEM
+cd ~/Projects/eIF4A_aptamer/Alignment
+mkdir bam_transcriptome
+scp *.transcriptome.bam ./bam_transcriptome
+
+cd bam_transcriptome
+
+nohup rsem-calculate-expression --bam --no-bam-output -p 10 \
+--alignments CK1.RNA.unique.transcriptome.bam \
+~/Projects/eIF4A_aptamer/Genome/T2T_Nipponbare/RSEM_reference/rsem_lib \
+../CK1_RNA_quant &
+
+nohup rsem-calculate-expression --bam --no-bam-output -p 10 \
+--alignments CK2.RNA.unique.transcriptome.bam \
+~/Projects/eIF4A_aptamer/Genome/T2T_Nipponbare/RSEM_reference/rsem_lib \
+../CK2_RNA_quant &
+
+nohup rsem-calculate-expression --bam --no-bam-output -p 10 \
+--alignments Salt1.RNA.unique.transcriptome.bam \
+~/Projects/eIF4A_aptamer/Genome/T2T_Nipponbare/RSEM_reference/rsem_lib \
+../Salt1_RNA_quant &
+
+nohup rsem-calculate-expression --bam --no-bam-output -p 10 \
+--alignments Salt2.RNA.unique.transcriptome.bam \
+~/Projects/eIF4A_aptamer/Genome/T2T_Nipponbare/RSEM_reference/rsem_lib \
+../Salt2_RNA_quant &
+
+##########RSEM for HD961
+
+cd ~/Projects/eIF4A_aptamer/HD961_Alignment
+mkdir bam_transcriptome
+scp *.transcriptome.bam ./bam_transcriptome
+
+cd bam_transcriptome
+
+nohup rsem-calculate-expression --bam --no-bam-output -p 10 \
+--alignments CK1.unique.transcriptome.bam \
+~/Projects/eIF4A_aptamer/Genome/HD961/RSEM_reference/rsem_lib \
+../CK1_quant &
+
+nohup rsem-calculate-expression --bam --no-bam-output -p 10 \
+--alignments CK2.unique.transcriptome.bam \
+~/Projects/eIF4A_aptamer/Genome/HD961/RSEM_reference/rsem_lib \
+../CK2_quant &
+
+nohup rsem-calculate-expression --bam --no-bam-output -p 10 \
+--alignments Salt1.unique.transcriptome.bam \
+~/Projects/eIF4A_aptamer/Genome/HD961/RSEM_reference/rsem_lib \
+../Salt1_quant &
+
+nohup rsem-calculate-expression --bam --no-bam-output -p 10 \
+--alignments Salt2.unique.transcriptome.bam \
+~/Projects/eIF4A_aptamer/Genome/HD961/RSEM_reference/rsem_lib \
+../Salt2_quant &
+

@@ -1,0 +1,126 @@
+# File: scripts/01_genome_assembly.sh
+# Purpose: De novo assemble HD961 genome from Nanopore, Illumina WGS, and Hi-C data
+# Usage: bash 01_genome_assembly.sh
+
+set -euo pipefail
+
+# ─── User‐modifiable parameters ────────────────────────────────────────────────
+# SRA accessions for raw data
+SRR_WGS="SRRXXXXX"        # Illumina WGS (150 Gb) for polishing – replace with your SRR
+SRR_ONT="SRR34516471"     # Oxford Nanopore PromethION
+SRR_HIC="SRR34503555"     # Hi-C
+THREADS=16
+
+# Paths
+RAW_DIR="raw_data"
+ASM_DIR="assembly"
+PILON_JAR="/path/to/pilon.jar"     # path to pilon.jar
+WORKDIR="$(pwd)"
+
+# ─── Setup ────────────────────────────────────────────────────────────────────
+mkdir -p "$RAW_DIR" "$ASM_DIR"
+cd "$WORKDIR"
+
+# ─── Step 1: Download raw reads from SRA ─────────────────────────────────────────
+echo "[1/7] Downloading raw reads"
+for SRR in "$SRR_WGS" "$SRR_ONT" "$SRR_HIC"; do
+  fasterq-dump --split-files --outdir "$RAW_DIR" $SRR
+done
+
+# ─── Step 2: Prepare file variables ─────────────────────────────────────────────
+WGS_R1="$RAW_DIR/${SRR_WGS}_1.fastq"
+WGS_R2="$RAW_DIR/${SRR_WGS}_2.fastq"
+ONT_FASTQS=("$RAW_DIR/${SRR_ONT}_1.fastq" "$RAW_DIR/${SRR_ONT}_2.fastq")
+HIC_FASTQS=("$RAW_DIR/${SRR_HIC}_1.fastq" "$RAW_DIR/${SRR_HIC}_2.fastq")
+
+# ─── Step 3: Nanopore‐only assembly ─────────────────────────────────────────────
+echo "[2/7] Assembling ONT reads with NECAT + SmartDenovo"
+cd "$ASM_DIR"
+# 3.1 NECAT correction config:
+cat > necat.cfg <<EOF
+Project     = HD961
+RawReads    = $(printf "%s," "${ONT_FASTQS[@]}")
+GenomeSize  = 450m
+ThreadNum   = $THREADS
+MinReadLength = 1000
+EOF
+necat correct necat.cfg
+
+# 3.2 SmartDenovo assembly
+CORR_FA=$(ls corrected_reads/*.fa | head -n1)
+smartdenovo.pl -p hd961 "$CORR_FA" > Makefile.sd
+make -j"$THREADS" -f Makefile.sd
+mv hd961.draft.fa hd961.contigs.fa
+
+# ─── Step 4: Polishing with Illumina WGS reads ───────────────────────────────────
+echo "[3/7] Polishing contigs with Illumina WGS (3× Racon + 3× Pilon)"
+# 4.1 Racon rounds
+for i in 1 2 3; do
+  minimap2 -t $THREADS -x map-ont hd961.contigs.fa "${ONT_FASTQS[@]}" > racon$i.paf
+  racon -t $THREADS "${ONT_FASTQS[@]}" racon$i.paf hd961.contigs.fa > tmp.fa
+  mv tmp.fa hd961.contigs.fa
+done
+
+# 4.2 Pilon rounds
+bwa index hd961.contigs.fa
+for i in 1 2 3; do
+  bwa mem -t $THREADS hd961.contigs.fa "$WGS_R1" "$WGS_R2" | \
+    samtools sort -@"$THREADS" -o illumina.bam
+  samtools index illumina.bam
+  java -Xmx64G -jar "$PILON_JAR" \
+    --genome hd961.contigs.fa \
+    --frags illumina.bam \
+    --output hd961.pilon$i \
+    --threads $THREADS
+  mv hd961.pilon$i.fasta hd961.contigs.fa
+done
+
+# ─── Step 5: Hi-C scaffolding ────────────────────────────────────────────────────
+echo "[4/7] Scaffolding with Hi-C (LACHESIS)"
+# prepare Hi-C BAM:
+bwa mem -5SP -t $THREADS hd961.contigs.fa "${HIC_FASTQS[@]}" | \
+  samtools view -bS - | samtools sort -@"$THREADS" -o hic.bam
+samtools index hic.bam
+# run LACHESIS (assumes config file is in WORKDIR/lachesis.cfg)
+cd "$WORKDIR"
+LACHESIS lachesis.cfg
+
+# ─── Step 6: Final assembly placement ───────────────────────────────────────────
+echo "[5/7] Moving final scaffolds"
+mv lachesis_out/scaffolds.fasta "$ASM_DIR/hd961.scaffolds.fa"
+
+# ─── Step 7: Cleanup and summary ───────────────────────────────────────────────
+echo "[6/7] Assembly complete. Summary:"
+grep -E ">" -c "$ASM_DIR/hd961.scaffolds.fa" && echo "Check $ASM_DIR"
+echo "[7/7] Next: run scripts/02_assembly_qc.sh for QC"
+
+# File: scripts/02_assembly_qc.sh
+# Purpose: Evaluate completeness and quality of the HD961 assembly
+# Usage: bash 02_assembly_qc.sh
+
+set -euo pipefail
+
+ASM="assembly/hd961.scaffolds.fa"
+ILLUMINA_WGS_R1="raw_data/SRRXXXXX_1.fastq"   # replace SRRXXXXX
+ILLUMINA_WGS_R2="raw_data/SRRXXXXX_2.fastq"
+THREADS=16
+
+echo "[1/5] BUSCO (embryophyta_odb10)"
+busco -i $ASM -o busco_hd961 -l embryophyta_odb10 -m genome -c $THREADS
+
+echo "[2/5] CEGMA"
+cegma -g $ASM > cegma_hd961.txt
+
+echo "[3/5] Mapping WGS reads for coverage"
+bwa index $ASM
+bwa mem -t $THREADS $ASM $ILLUMINA_WGS_R1 $ILLUMINA_WGS_R2 | \
+  samtools sort -@"$THREADS" -o illumina_vs_asm.bam
+samtools index illumina_vs_asm.bam
+mosdepth --by 1000 coverage_hd961 illumina_vs_asm.bam
+
+echo "[4/5] RepeatModeler / RepeatMasker"
+BuildDatabase -name hd961_db $ASM
+RepeatModeler -database hd961_db -pa $THREADS
+RepeatMasker -pa $THREADS -lib hd961_db-families.fa $ASM -dir repeatmasker_hd961
+
+echo "[5/5] QC complete. Results in busco_hd961/, cegma_hd961.txt, coverage_hd961.*, repeatmasker_hd961/"
